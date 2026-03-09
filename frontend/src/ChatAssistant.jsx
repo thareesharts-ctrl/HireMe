@@ -38,7 +38,7 @@ const ChatAssistant = () => {
             // Send messages formatted for the API (only role and content)
             const apiMessages = newMessages.map(m => ({ role: m.role, content: m.content }));
 
-            const response = await axios.post('http://localhost:5000/api/chat', {
+            const response = await axios.post('http://127.0.0.1:5000/api/chat', {
                 messages: apiMessages
             });
 

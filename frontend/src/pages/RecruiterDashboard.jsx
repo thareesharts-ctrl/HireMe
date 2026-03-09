@@ -16,6 +16,9 @@ function RecruiterDashboard() {
     const [user, setUser] = useState(null);
     const [showProfileDropdown, setShowProfileDropdown] = useState(false);
     const [selectedCandidate, setSelectedCandidate] = useState(null);
+    const [showSuccessModal, setShowSuccessModal] = useState(false);
+    const [showEmailModal, setShowEmailModal] = useState(false);
+    const [generatedEmail, setGeneratedEmail] = useState({ content: '', candidate: '' });
 
     // Layout State
     const [activeTab, setActiveTab] = useState('jobs'); // 'jobs' or 'candidates'
@@ -40,20 +43,29 @@ function RecruiterDashboard() {
             const parsedUser = JSON.parse(userData);
             setUser(parsedUser);
 
-            // Try fetching from local storage first
-            const storedProfile = localStorage.getItem(`recruiterProfile_${parsedUser.email}`);
-            if (storedProfile) {
-                setProfileData(JSON.parse(storedProfile));
-            } else {
-                setProfileData(prev => ({ ...prev, name: parsedUser.name || '', email: parsedUser.email || '' }));
-            }
+            // Fetch Recruiter DB Profile
+            axios.post('http://127.0.0.1:5000/api/get_user', { email: parsedUser.email })
+                .then(res => {
+                    if (res.data.success && res.data.user) {
+                        const dbUser = res.data.user;
+                        if (dbUser.recruiter_profile) {
+                            setProfileData(prev => ({ ...prev, ...dbUser.recruiter_profile }));
+                        } else {
+                            setProfileData(prev => ({ ...prev, name: parsedUser.name || '', email: parsedUser.email || '' }));
+                        }
+                    }
+                })
+                .catch(err => {
+                    console.error("Failed to fetch recruiter profile:", err);
+                    setProfileData(prev => ({ ...prev, name: parsedUser.name || '', email: parsedUser.email || '' }));
+                });
         } else {
             navigate('/login');
         }
 
         const fetchCandidates = async (recruiterEmail) => {
             try {
-                const response = await axios.get(`http://localhost:5000/api/recruiter_candidates?email=${recruiterEmail}`);
+                const response = await axios.get(`http://127.0.0.1:5000/api/recruiter_candidates?email=${recruiterEmail}`);
                 if (response.data.success) {
                     setCandidates([...response.data.candidates]);
                 }
@@ -67,7 +79,7 @@ function RecruiterDashboard() {
 
         const fetchJobs = async () => {
             try {
-                const response = await axios.get('http://localhost:5000/api/jobs');
+                const response = await axios.get('http://127.0.0.1:5000/api/jobs');
                 if (response.data.success) {
                     setJobs(response.data.jobs);
                 }
@@ -92,13 +104,12 @@ function RecruiterDashboard() {
     const handleProfileUpdate = async (e) => {
         e.preventDefault();
         try {
-            await axios.post('http://localhost:5000/api/update_recruiter_profile', {
+            await axios.post('http://127.0.0.1:5000/api/update_recruiter_profile', {
                 ...profileData,
                 email: user.email
             });
-            localStorage.setItem(`recruiterProfile_${user.email}`, JSON.stringify(profileData));
             const updatedUser = { ...user, name: profileData.name };
-            localStorage.setItem('user', JSON.stringify(updatedUser));
+            localStorage.setItem('user', JSON.stringify(updatedUser)); // keep session updated
             setUser(updatedUser);
             setShowEditModal(false);
             alert('Recruiter profile updated successfully!');
@@ -118,13 +129,30 @@ function RecruiterDashboard() {
                 companyName: profileData.companyName || 'Unknown Company',
                 datePosted: new Date().toISOString()
             };
-            await axios.post('http://localhost:5000/api/post_job', jobPayload);
-            setJobs([{ ...jobPayload, _id: Math.random().toString() }, ...jobs]); // Optimistic update
+            const res = await axios.post('http://127.0.0.1:5000/api/post_job', jobPayload);
+            if (res.data.success) {
+                setJobs([{ ...jobPayload, _id: res.data.jobId }, ...jobs]); // Real update with actual ID
+            }
             setJobData({ role: '', description: '', vacancies: '' });
-            alert('Job posted successfully! Candidates can now apply.');
+            setShowSuccessModal(true);
+            setTimeout(() => setShowSuccessModal(false), 3000); // Auto-hide after 3s
         } catch (error) {
             console.error('Error posting job:', error);
             alert("Failed to post job.");
+        }
+    };
+
+    const handleClosePosition = async (jobId) => {
+        if (!window.confirm("Are you sure you want to close this job position? It will be removed from all candidate dashboards permanently.")) return;
+
+        try {
+            const res = await axios.delete(`http://127.0.0.1:5000/api/delete_job?id=${jobId}`);
+            if (res.data.success) {
+                setJobs(prevJobs => prevJobs.filter(j => j._id !== jobId));
+            }
+        } catch (error) {
+            console.error("Failed to delete job:", error);
+            alert("Error closing position. Please check your connection.");
         }
     };
 
@@ -141,13 +169,30 @@ function RecruiterDashboard() {
             return;
         }
         try {
-            await axios.post('http://localhost:5000/api/update_status', {
+            const response = await axios.post('http://127.0.0.1:5000/api/update_status', {
                 email: cand.email,
+                candidateName: cand.name,
+                jobRole: cand.role,
+                recruiterName: profileData.name || "HireMe Recruiter",
+                companyName: profileData.companyName || "HireMe Partner",
                 status: newStatus
             });
-            setCandidates(candidates.map(c =>
-                c.id === cand.id ? { ...c, status: newStatus } : c
-            ));
+
+            if (response.data.success) {
+                setCandidates(candidates.map(c =>
+                    c.id === cand.id ? { ...c, status: newStatus } : c
+                ));
+
+                if (newStatus === "Hired" && response.data.emailContent) {
+                    setGeneratedEmail({
+                        content: response.data.emailContent,
+                        candidate: cand.name
+                    });
+                    setShowEmailModal(true);
+                } else {
+                    alert(`Candidate status updated to ${newStatus}.`);
+                }
+            }
         } catch (error) {
             console.error("Failed to update status", error);
             alert("Failed to update candidate status.");
@@ -323,7 +368,11 @@ function RecruiterDashboard() {
                                                             {job.description}
                                                         </p>
                                                     </div>
-                                                    <button style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#ef4444', padding: '0.5rem', borderRadius: '8px', cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Close Position">
+                                                    <button
+                                                        onClick={() => handleClosePosition(job._id)}
+                                                        style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#ef4444', padding: '0.5rem', borderRadius: '8px', cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                                        title="Close Position"
+                                                    >
                                                         <XCircle size={18} />
                                                     </button>
                                                 </div>
@@ -492,15 +541,24 @@ function RecruiterDashboard() {
 
                         <div style={{ padding: '2rem', overflowY: 'auto', flex: 1 }}>
 
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1.5rem', marginBottom: '2rem' }}>
-                                <div style={{ background: '#f1f5f9', padding: '1rem', borderRadius: '12px' }}>
-                                    <div style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.5rem' }}>ATS Match</div>
-                                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: selectedCandidate.atsScore >= 80 ? '#10b981' : '#f59e0b' }}>{selectedCandidate.atsScore}%</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
+                                <div style={{ background: '#f1f5f9', padding: '1rem', borderRadius: '12px', gridColumn: 'span 2' }}>
+                                    <div style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.5rem' }}>ATS Match</div>
+                                    <div style={{ fontSize: '1.5rem', fontWeight: 800, color: selectedCandidate.atsScore >= 80 ? '#10b981' : '#f59e0b' }}>{selectedCandidate.atsScore}%</div>
                                 </div>
-                                <div style={{ background: '#f1f5f9', padding: '1rem', borderRadius: '12px' }}>
-                                    <div style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.5rem' }}>Assessment Score</div>
-                                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: selectedCandidate.testScore !== null ? (selectedCandidate.testScore >= 80 ? '#10b981' : '#3b82f6') : '#94a3b8' }}>
-                                        {selectedCandidate.testScore !== null ? `${selectedCandidate.testScore}%` : 'Not Taken'}
+                                <div style={{ background: '#f1f5f9', padding: '1rem', borderRadius: '12px', gridColumn: 'span 3', display: 'flex', flexDirection: 'column' }}>
+                                    <div style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.5rem' }}>Assessment Score</div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: selectedCandidate.testScore !== null ? (selectedCandidate.testScore >= 80 ? '#10b981' : '#3b82f6') : '#94a3b8' }}>
+                                            {selectedCandidate.testScore !== null ? `${selectedCandidate.testScore}%` : 'Not Taken'}
+                                        </div>
+                                        {selectedCandidate.testScore !== null && selectedCandidate.aptitudeScore !== undefined && selectedCandidate.aptitudeScore !== null && (
+                                            <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#475569' }}>
+                                                <div style={{ background: '#e2e8f0', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>Apt: {selectedCandidate.aptitudeScore}/20</div>
+                                                <div style={{ background: '#e2e8f0', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>Tech: {selectedCandidate.technicalScore}/20</div>
+                                                <div style={{ background: '#e2e8f0', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>DSA: {selectedCandidate.dsaScore}/10</div>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
@@ -526,16 +584,27 @@ function RecruiterDashboard() {
                                         <span style={{ color: '#334155', fontWeight: 500 }}>{selectedCandidate.profile.domain} <br /> <span style={{ color: '#2563eb', fontWeight: 700, marginTop: '4px', display: 'inline-block' }}>{selectedCandidate.profile.skill}</span></span>
                                     </div>
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                        <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>Full Location Address</span>
+                                        <span style={{ color: '#334155', fontWeight: 500 }}>{selectedCandidate.profile.address || 'Not Provided'}</span>
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                                         <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>APAAR ID</span>
                                         <span style={{ color: '#334155', fontWeight: 500, letterSpacing: '1px' }}>{selectedCandidate.profile.apaarNumber || 'N/A'}</span>
                                     </div>
 
-                                    <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem', gridColumn: '1 / -1' }}>
+                                    <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem', gridColumn: '1 / -1', borderTop: '1px solid #e2e8f0', paddingTop: '1.5rem', flexWrap: 'wrap' }}>
                                         {selectedCandidate.profile.github && (
-                                            <a href={selectedCandidate.profile.github} target="_blank" rel="noreferrer" style={{ textDecoration: 'none', padding: '0.5rem 1rem', background: '#334155', color: 'white', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 600 }}>GitHub</a>
+                                            <a href={selectedCandidate.profile.github} target="_blank" rel="noreferrer" style={{ textDecoration: 'none', padding: '0.6rem 1.25rem', background: '#334155', color: 'white', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>GitHub Profile</a>
                                         )}
                                         {selectedCandidate.profile.linkedin && (
-                                            <a href={selectedCandidate.profile.linkedin} target="_blank" rel="noreferrer" style={{ textDecoration: 'none', padding: '0.5rem 1rem', background: '#0284c7', color: 'white', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 600 }}>LinkedIn</a>
+                                            <a href={selectedCandidate.profile.linkedin} target="_blank" rel="noreferrer" style={{ textDecoration: 'none', padding: '0.6rem 1.25rem', background: '#0284c7', color: 'white', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>LinkedIn Profile</a>
+                                        )}
+                                        {selectedCandidate.resumeUrl ? (
+                                            <a href={selectedCandidate.resumeUrl} target="_blank" rel="noreferrer" style={{ textDecoration: 'none', padding: '0.6rem 1.25rem', background: '#dc2626', color: 'white', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', boxShadow: '0 2px 4px rgba(220, 38, 38, 0.2)' }}>
+                                                <FileText size={18} /> View PDF Resume
+                                            </a>
+                                        ) : (
+                                            <div style={{ padding: '0.6rem 1.25rem', background: '#f1f5f9', color: '#64748b', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 600, border: '1px dashed #cbd5e1' }}>No Resume Uploaded</div>
                                         )}
                                     </div>
                                 </div>
@@ -549,6 +618,84 @@ function RecruiterDashboard() {
                         </div>
                         <div style={{ padding: '1.25rem 1.5rem', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', backgroundColor: '#f8fafc' }}>
                             <button onClick={() => setSelectedCandidate(null)} style={{ padding: '0.6rem 2rem', border: 'none', borderRadius: '8px', background: '#2563eb', color: 'white', fontWeight: 600, cursor: 'pointer' }}>Close</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Success Toast / Modal */}
+            {showSuccessModal && (
+                <div className="fade-in-up" style={{
+                    position: 'fixed', bottom: '2rem', right: '2rem', zIndex: 150,
+                    background: '#10b981', color: 'white', padding: '1rem 1.5rem',
+                    borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '1rem',
+                    boxShadow: '0 10px 25px rgba(16, 185, 129, 0.4)'
+                }}>
+                    <CheckCircle size={24} color="white" />
+                    <div>
+                        <h4 style={{ margin: 0, fontWeight: 700, fontSize: '1rem' }}>Published Successfully!</h4>
+                        <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.85rem', opacity: 0.9 }}>Job opening is now live for candidates.</p>
+                    </div>
+                </div>
+            )}
+
+            {/* AI Generated Email Modal */}
+            {showEmailModal && (
+                <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', backgroundColor: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(10px)' }}>
+                    <div className="fade-in-up" style={{ background: '#f8fafc', borderRadius: '24px', width: '100%', maxWidth: '750px', overflow: 'hidden', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.8)' }}>
+                        {/* Browser-like Header */}
+                        <div style={{ background: '#f1f5f9', padding: '1.25rem 1.75rem', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '2rem' }}>
+                            <div style={{ display: 'flex', gap: '0.6rem' }}>
+                                <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ff5f56' }}></div>
+                                <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ffbd2e' }}></div>
+                                <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#27c93f' }}></div>
+                            </div>
+                            <div style={{ flex: 1, background: '#ffffff', borderRadius: '10px', padding: '0.5rem 1.25rem', fontSize: '0.9rem', color: '#64748b', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '0.75rem', fontWeight: 500 }}>
+                                <Building2 size={16} className="text-blue-500" /> hireme.ai/recruiter/mailing-system
+                            </div>
+                            <button onClick={() => setShowEmailModal(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', transition: 'color 0.2s' }}>
+                                <XCircle size={26} />
+                            </button>
+                        </div>
+
+                        {/* Email Body */}
+                        <div style={{ padding: '2.5rem' }}>
+                            <div style={{ background: 'white', borderRadius: '20px', border: '1px solid #e2e8f0', overflow: 'hidden', boxShadow: '0 8px 16px -4px rgba(0,0,0,0.05)' }}>
+                                <div style={{ padding: '1.75rem', background: 'linear-gradient(135deg, #1e40af, #2563eb)', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                        <div style={{ width: '45px', height: '45px', background: 'rgba(255,255,255,0.15)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+                                            <Mail size={22} color="white" />
+                                        </div>
+                                        <div>
+                                            <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800 }}>Selection Confirmation</h3>
+                                            <p style={{ margin: 0, fontSize: '0.8rem', opacity: 0.85, fontWeight: 500 }}>Branded Automated Communication</p>
+                                        </div>
+                                    </div>
+                                    <div style={{ fontSize: '0.85rem', opacity: 0.9, fontWeight: 600 }}>PRIORITY: HIGH</div>
+                                </div>
+
+                                <div style={{ padding: '3rem', whiteSpace: 'pre-line', color: '#1e293b', fontSize: '1.05rem', lineHeight: 1.9, maxHeight: '450px', overflowY: 'auto', background: 'linear-gradient(to bottom, #ffffff, #f1f5f9)', scrollbarWidth: 'thin' }}>
+                                    {generatedEmail.content}
+                                </div>
+
+                                <div style={{ padding: '1.75rem', background: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: '#64748b', fontSize: '0.9rem', fontWeight: 600 }}>
+                                        <Activity size={18} /> Verified by HireMe AI
+                                    </div>
+                                    <button
+                                        onClick={() => setShowEmailModal(false)}
+                                        style={{ padding: '0.75rem 2rem', background: '#2563eb', color: 'white', border: 'none', borderRadius: '10px', fontWeight: 700, cursor: 'pointer', boxShadow: '0 10px 15px -3px rgba(37, 99, 235, 0.3)', transition: 'transform 0.2s' }}
+                                    >
+                                        Confirm & Close
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '2rem', marginTop: '2rem' }}>
+                                <div style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: 500 }}>Recipient: <b style={{ color: '#475569' }}>{generatedEmail.candidate}</b></div>
+                                <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: '#cbd5e1' }}></div>
+                                <div style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: 500 }}>System: <b style={{ color: '#475569' }}>HireMe Smart-Recruiter v2</b></div>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -14,3 +14,4 @@ backend/*.pyc
 backend/.env
 frontend/dist/
 .DS_Store
+backend/uploads/

@@ -10,6 +10,8 @@ function ApplierDashboard() {
     const [showEditModal, setShowEditModal] = useState(false);
     const [showAssessmentModal, setShowAssessmentModal] = useState(null); // stores the job object applied to
     const [jobs, setJobs] = useState([]);
+    const [appliedJobIds, setAppliedJobIds] = useState([]);
+    const [searchJobTerm, setSearchJobTerm] = useState('');
     const navigate = useNavigate();
 
     // Profile Form State
@@ -50,40 +52,58 @@ function ApplierDashboard() {
             const parsedUser = JSON.parse(userData);
             setUser(parsedUser);
 
-            // Scope Profile data to this email
-            const userProfileStorageKey = `userProfileData_${parsedUser.email}`;
-            const storedProfile = localStorage.getItem(userProfileStorageKey);
+            // Fetch Dynamic User DB Profile
+            axios.post('http://127.0.0.1:5000/api/get_user', { email: parsedUser.email })
+                .then(res => {
+                    if (res.data.success && res.data.user) {
+                        const dbUser = res.data.user;
+                        if (dbUser.profileData) {
+                            setFormData(prev => ({ ...prev, ...dbUser.profileData }));
+                        } else {
+                            const names = dbUser.name ? dbUser.name.split(' ') : ['', ''];
+                            setFormData(prev => ({
+                                ...prev,
+                                firstName: names[0] || '',
+                                lastName: names.slice(1).join(' ') || '',
+                                email: dbUser.email || ''
+                            }));
+                        }
 
-            const names = parsedUser.name ? parsedUser.name.split(' ') : ['', ''];
+                        const userAnalyticsStorageKey = `userAnalytics_${parsedUser.email}`;
+                        let parsedAnalytics = null;
+                        if (localStorage.getItem(userAnalyticsStorageKey)) {
+                            parsedAnalytics = JSON.parse(localStorage.getItem(userAnalyticsStorageKey));
+                        } else {
+                            parsedAnalytics = {};
+                        }
 
-            if (storedProfile) {
-                setFormData(JSON.parse(storedProfile));
-            } else {
-                setFormData(prev => ({
-                    ...prev,
-                    firstName: names[0] || '',
-                    lastName: names.slice(1).join(' ') || '',
-                    email: parsedUser.email || '',
-                    ...parsedUser.profileData // fallback to legacy
-                }));
-            }
+                        if (dbUser.atsScore !== undefined) parsedAnalytics.atsScore = dbUser.atsScore;
+                        if (dbUser.testScore !== undefined) parsedAnalytics.mockScore = dbUser.testScore;
 
-            // Scope Analytics data to this email
-            const userAnalyticsStorageKey = `userAnalytics_${parsedUser.email}`;
-            const storedAnalytics = localStorage.getItem(userAnalyticsStorageKey);
-            if (storedAnalytics) {
-                setAnalytics(JSON.parse(storedAnalytics));
-            } else {
-                setAnalytics(null); // Clear analytics if this specific user has none
-            }
+                        if (Object.keys(parsedAnalytics).length > 0) {
+                            setAnalytics(parsedAnalytics);
+                        } else {
+                            setAnalytics(null);
+                        }
+                    }
+                })
+                .catch(err => console.error("Failed to fetch user:", err));
 
-            axios.get('http://localhost:5000/api/jobs')
+            axios.get('http://127.0.0.1:5000/api/jobs')
                 .then(res => {
                     if (res.data.success) {
                         setJobs(res.data.jobs);
                     }
                 })
                 .catch(err => console.error("Failed to fetch jobs:", err));
+
+            axios.post('http://127.0.0.1:5000/api/my_applications', { email: parsedUser.email })
+                .then(res => {
+                    if (res.data.success) {
+                        setAppliedJobIds(res.data.appliedJobIds || []);
+                    }
+                })
+                .catch(err => console.error("Failed to fetch applications:", err));
 
         } else {
             navigate('/login');
@@ -99,7 +119,7 @@ function ApplierDashboard() {
         e.preventDefault();
         try {
             // Push profile to database
-            await axios.post('http://localhost:5000/api/update_profile', {
+            await axios.post('http://127.0.0.1:5000/api/update_profile', {
                 ...formData,
                 email: user.email
             });
@@ -121,7 +141,7 @@ function ApplierDashboard() {
 
     const handleApplyJob = async (job) => {
         try {
-            await axios.post('http://localhost:5000/api/apply_job', {
+            await axios.post('http://127.0.0.1:5000/api/apply_job', {
                 jobId: job._id,
                 candidateEmail: user.email,
                 recruiterEmail: job.recruiterEmail,
@@ -129,6 +149,7 @@ function ApplierDashboard() {
                 appliedDate: new Date().toISOString().split('T')[0],
                 status: "Reviewing"
             });
+            setAppliedJobIds(prev => [...prev, job._id]);
             setShowAssessmentModal(job);
         } catch (error) {
             if (error.response && error.response.status === 400) {
@@ -171,7 +192,14 @@ function ApplierDashboard() {
                     <div style={{ position: 'relative', width: '100%' }}>
                         <input
                             type="text"
-                            placeholder="Search jobs, companies, exams..."
+                            placeholder="Search jobs, companies, roles..."
+                            value={searchJobTerm}
+                            onChange={(e) => {
+                                setSearchJobTerm(e.target.value);
+                                if (e.target.value.length > 0) {
+                                    document.getElementById('community-jobs')?.scrollIntoView({ behavior: 'smooth' });
+                                }
+                            }}
                             style={{
                                 width: '100%', padding: '0.6rem 1rem 0.6rem 2.5rem',
                                 borderRadius: '999px', border: '1px solid #e2e8f0',
@@ -376,10 +404,10 @@ function ApplierDashboard() {
                                     { title: 'Take DomainMock Assessment', icon: <CheckCircle size={18} color="#8b5cf6" />, path: '/applier/mock' },
                                     { title: 'Get Career Guidance', icon: <Zap size={18} color="#ec4899" />, path: '/applier/guidance' },
                                     { title: 'AI Mock Interview', icon: <Bot size={18} color="#3b82f6" />, path: '/applier/assistant-interview' },
-                                    { title: 'Find Jobs & Internships', icon: <Search size={18} color="#10b981" /> }
+                                    { title: 'Find Jobs & Internships', icon: <Search size={18} color="#10b981" />, action: () => document.getElementById('community-jobs')?.scrollIntoView({ behavior: 'smooth' }) }
                                 ].map((card, i) => (
                                     <div key={i}
-                                        onClick={() => card.path ? navigate(card.path) : null}
+                                        onClick={() => card.path ? navigate(card.path) : (card.action ? card.action() : null)}
                                         style={{
                                             background: 'white', padding: '1.25rem', borderRadius: '12px', border: '1px solid #e2e8f0',
                                             flex: '1 1 250px', display: 'flex', alignItems: 'center', gap: '1rem',
@@ -417,10 +445,10 @@ function ApplierDashboard() {
                                 { title: 'Take Domain Mock Assessment', icon: <CheckCircle size={20} color="#8b5cf6" />, path: '/applier/mock' },
                                 { title: 'Get career guidance', icon: <Zap size={20} color="#ec4899" />, path: '/applier/guidance' },
                                 { title: 'AI Mock Interview', icon: <Bot size={20} color="#3b82f6" />, path: '/applier/assistant-interview' },
-                                { title: 'Find jobs & internships', icon: <Search size={20} color="#10b981" /> }
+                                { title: 'Find jobs & internships', icon: <Search size={20} color="#10b981" />, action: () => document.getElementById('community-jobs')?.scrollIntoView({ behavior: 'smooth' }) }
                             ].map((card, i) => (
                                 <div key={i}
-                                    onClick={() => card.path ? navigate(card.path) : null}
+                                    onClick={() => card.path ? navigate(card.path) : (card.action ? card.action() : null)}
                                     style={{
                                         background: 'white', padding: '1.5rem', borderRadius: '12px', border: '1px solid #e2e8f0',
                                         width: '100%', maxWidth: '300px', display: 'flex', alignItems: 'center', gap: '1rem',
@@ -442,14 +470,22 @@ function ApplierDashboard() {
                 )}
 
                 {/* --- Community Job Openings Section --- */}
-                <div style={{ marginTop: '3rem', borderTop: '1px solid #e2e8f0', paddingTop: '2.5rem', textAlign: 'left' }}>
+                <div id="community-jobs" style={{ marginTop: '3rem', borderTop: '1px solid #e2e8f0', paddingTop: '2.5rem', textAlign: 'left' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
                         <Briefcase size={24} color="#2563eb" />
                         <h2 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#0f172a', margin: 0 }}>Community Job Openings</h2>
                     </div>
-                    {jobs.length > 0 ? (
+                    {jobs.filter(job =>
+                        job.role.toLowerCase().includes(searchJobTerm.toLowerCase()) ||
+                        job.companyName.toLowerCase().includes(searchJobTerm.toLowerCase()) ||
+                        job.description.toLowerCase().includes(searchJobTerm.toLowerCase())
+                    ).length > 0 ? (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
-                            {jobs.map((job) => (
+                            {jobs.filter(job =>
+                                job.role.toLowerCase().includes(searchJobTerm.toLowerCase()) ||
+                                job.companyName.toLowerCase().includes(searchJobTerm.toLowerCase()) ||
+                                job.description.toLowerCase().includes(searchJobTerm.toLowerCase())
+                            ).map((job) => (
                                 <div key={job._id} style={{
                                     background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0',
                                     padding: '1.5rem', boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
@@ -467,9 +503,22 @@ function ApplierDashboard() {
                                     </div>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #f1f5f9', paddingTop: '1rem' }}>
                                         <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Posted by {job.recruiterName}</span>
-                                        <button className="btn-primary" style={{ padding: '0.4rem 1rem', fontSize: '0.85rem' }} onClick={() => handleApplyJob(job)}>
-                                            Apply Now
-                                        </button>
+                                        {appliedJobIds.includes(job._id) ? (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: '#10b981', fontSize: '0.85rem', fontWeight: 700 }}>
+                                                    <CheckCircle size={16} /> Applied
+                                                </div>
+                                                <button className="btn-primary"
+                                                    style={{ padding: '0.4rem 1rem', fontSize: '0.85rem', background: 'linear-gradient(135deg, #8b5cf6, #7c3aed)', border: 'none' }}
+                                                    onClick={() => navigate(`/applier/assessment/${job._id}`)}>
+                                                    Take Test
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <button className="btn-primary" style={{ padding: '0.4rem 1rem', fontSize: '0.85rem' }} onClick={() => handleApplyJob(job)}>
+                                                Apply Now
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             ))}
@@ -477,7 +526,11 @@ function ApplierDashboard() {
                     ) : (
                         <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '3rem', textAlign: 'center', color: '#64748b' }}>
                             <Briefcase size={32} style={{ margin: '0 auto 1rem auto', opacity: 0.5 }} />
-                            <p style={{ margin: 0 }}>No active job openings right now. Check back soon!</p>
+                            <p style={{ margin: 0 }}>
+                                {searchJobTerm
+                                    ? `No active job openings found matching "${searchJobTerm}". Try different keywords.`
+                                    : "No active job openings right now. Check back soon!"}
+                            </p>
                         </div>
                     )}
                 </div>
@@ -574,8 +627,8 @@ function ApplierDashboard() {
                             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '1rem', marginBottom: '1.5rem', textAlign: 'left' }}>
                                 <div style={{ background: '#f8fafc', padding: '1.25rem', borderRadius: '12px', border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                                     <ClipboardList size={22} color="#2563eb" />
-                                    <span style={{ fontWeight: 800, color: '#0f172a', fontSize: '1.1rem' }}>40 Questions</span>
-                                    <span style={{ fontSize: '0.85rem', color: '#64748b' }}>20 Aptitude<br />20 Technical</span>
+                                    <span style={{ fontWeight: 800, color: '#0f172a', fontSize: '1.1rem' }}>41 Sections</span>
+                                    <span style={{ fontSize: '0.85rem', color: '#64748b' }}>20 Aptitude | 20 Technical<br />1 DSA Coding</span>
                                 </div>
                                 <div style={{ background: '#f8fafc', padding: '1.25rem', borderRadius: '12px', border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                                     <Clock size={22} color="#f59e0b" />

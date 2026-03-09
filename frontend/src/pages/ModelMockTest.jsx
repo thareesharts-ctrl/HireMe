@@ -102,7 +102,7 @@ function ModelMockTest() {
         setTestState('loading');
         setWarnings(0);
         try {
-            const response = await axios.post('http://localhost:5000/api/generate-test', {
+            const response = await axios.post('http://127.0.0.1:5000/api/generate-test', {
                 skills: [selectedDomain, 'Core concepts', 'Best Practices', 'Modern Architecture']
             });
 
@@ -149,7 +149,7 @@ function ModelMockTest() {
 
         // Push test score to Backend
         if (userEmail !== 'guest') {
-            axios.post('http://localhost:5000/api/update_analytics', {
+            axios.post('http://127.0.0.1:5000/api/update_analytics', {
                 email: userEmail,
                 testScore: percentage
             }).catch(e => console.error("Failed to sync Test score to backend", e));

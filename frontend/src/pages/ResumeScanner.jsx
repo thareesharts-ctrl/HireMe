@@ -158,19 +158,21 @@ function ResumeScanner() {
 
         const formData = new FormData();
         formData.append('file', fileToUpload);
+        formData.append('email', userEmail);
 
         try {
-            const response = await axios.post('http://localhost:5000/api/analyze', formData, {
+            const response = await axios.post('http://127.0.0.1:5000/api/analyze', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
 
             if (response.data && response.data.success) {
                 // Post ATS Score to Backend for recruiter dashboard
                 if (userEmail !== 'guest') {
-                    axios.post('http://localhost:5000/api/update_analytics', {
+                    axios.post('http://127.0.0.1:5000/api/update_analytics', {
                         email: userEmail,
-                        atsScore: response.data.data.score
-                    }).catch(e => console.error("Failed to sync ATS score to backend", e));
+                        atsScore: response.data.data.score,
+                        resumeUrl: response.data.data.resume_url
+                    }).catch(e => console.error("Failed to sync resume info to backend", e));
                 }
 
                 setTimeout(() => {
@@ -201,7 +203,7 @@ function ResumeScanner() {
         setTestState('loading');
         setWarnings(0);
         try {
-            const response = await axios.post('http://localhost:5000/api/generate-test', {
+            const response = await axios.post('http://127.0.0.1:5000/api/generate-test', {
                 skills: results.skills
             });
 
@@ -241,6 +243,7 @@ function ResumeScanner() {
         const newData = {
             ...existingData,
             atsScore: results?.score || existingData.atsScore,
+            resumeUrl: results?.resume_url || existingData.resumeUrl,
             mockScore: percentage,
             mockDomain: 'Extracted Skills',
             skills: results?.skills || existingData.skills,
@@ -251,7 +254,7 @@ function ResumeScanner() {
 
         // Push test score to Backend
         if (userEmail !== 'guest') {
-            axios.post('http://localhost:5000/api/update_analytics', {
+            axios.post('http://127.0.0.1:5000/api/update_analytics', {
                 email: userEmail,
                 testScore: percentage
             }).catch(e => console.error("Failed to sync Test score to backend", e));

@@ -25,15 +25,15 @@ function Login() {
         setLoading(true);
         try {
             if (isLogin) {
-                const res = await axios.post('http://localhost:5000/api/login', { email, password });
+                const res = await axios.post('http://127.0.0.1:5000/api/login', { email, password });
                 if (res.data.success) {
                     localStorage.setItem('user', JSON.stringify(res.data.user));
                     navigate(res.data.user.role === 'admin' ? '/recruiter' : '/applier');
                 }
             } else {
-                const res = await axios.post('http://localhost:5000/api/register', { name, email, password, role });
+                const res = await axios.post('http://127.0.0.1:5000/api/register', { name, email, password, role });
                 if (res.data.success) {
-                    const loginRes = await axios.post('http://localhost:5000/api/login', { email, password });
+                    const loginRes = await axios.post('http://127.0.0.1:5000/api/login', { email, password });
                     if (loginRes.data.success) {
                         localStorage.setItem('user', JSON.stringify(loginRes.data.user));
                         navigate(loginRes.data.user.role === 'admin' ? '/recruiter' : '/applier');
